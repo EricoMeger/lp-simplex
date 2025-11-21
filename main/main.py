@@ -1,6 +1,5 @@
 from parser import Parser
+from tableau import Tableau
 
-parse = Parser("input/input.txt")
-
-result = parse.parse()
-print(result)
+parser = Parser("input/input.txt")
+result = parser.parse()
