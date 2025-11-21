@@ -15,6 +15,7 @@ class Parser:
         self.objective_coeffs = []
         self.constraints = []
         self.num_vars = 0
+        self.non_negative = []
 
     def parse(self):
         lines = [line.strip() for line in open(self.filepath)]
@@ -22,16 +23,36 @@ class Parser:
         self.parse_objective(lines[0])
 
         for line in lines[1:]:
-            if "<=" in line or ">=" in line or "=" in line:
+            if self.is_non_negative(line):
+                self.parse_non_negative(line)
+            elif "<=" in line or ">=" in line or "=" in line:
                 self.parse_constraint(line)
+
+        #if some variables were not mentioned in non-negativity constraints, assume they are non-negative
+        while len(self.non_negative) < self.num_vars:
+            self.non_negative.append(True)
 
         return {
             "objective_type": self.objective_type,
             "objective_coeffs": self.objective_coeffs,
             "constraints": self.constraints,
-            "num_vars": self.num_vars
+            "num_vars": self.num_vars,
+            "non_negative": self.non_negative
         }
-
+        
+    def is_non_negative(self, line):
+        return re.match(r"x\d+\s*>=\s*0$", line) is not None
+    
+    def parse_non_negative(self, line):
+        var = int(re.findall(r"x(\d+)", line)[0])
+        
+        self.num_vars = max(self.num_vars, var)
+        
+        while len(self.non_negative) < var:
+            self.non_negative.append(True)
+            
+        self.non_negative[var - 1] = True
+    
     def parse_objective(self, line):
         if line.startswith("Max"):
             self.objective_type = "Max"
