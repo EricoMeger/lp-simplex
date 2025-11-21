@@ -1,5 +1,11 @@
 from parser import Parser
 from tableau import Tableau
 
-parser = Parser("input/input.txt")
-result = parser.parse()
+def main():
+    filepath = "input/input.txt"
+
+    parser = Parser(filepath)
+    result = parser.parse()
+    
+
+main()
