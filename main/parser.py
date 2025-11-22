@@ -1,125 +1,123 @@
+# parser.py
 import re
 
 class Parser:
     """
-    Max 2x1 + 3x2 
-    2x1 + x2 <= 10
-    x1 + 3x2 <= 5
-    x1 >= 0
-    x2 >= 0
+    Parser que lê arquivo input com formato:
+      Max 3x1 + 5x2
+      x1 + 2x2 <= 6
+      3x1 + 2x2 <= 12
+      x1 >= 0
+      x2 free
+
+    Retorna dicionário com:
+      {
+        "objective_type": "Max"/"Min",
+        "objective_coeffs": [...],
+        "constraints": [(row, comp, b), ...],
+        "num_vars": n,
+        "non_negative": [...]
+      }
     """
 
     def __init__(self, filepath):
         self.filepath = filepath
-        self.objective_type = None 
-        self.objective_coeffs = []
-        self.constraints = []
-        self.num_vars = 0
-        self.non_negative = []
 
     def parse(self):
-        lines = [line.strip() for line in open(self.filepath)]
+        lines = [line.strip() for line in open(self.filepath, encoding="utf-8") if line.strip() and not line.strip().startswith("#")]
+        if not lines:
+            raise ValueError("Arquivo vazio")
 
-        self.parse_objective(lines[0])
+        # objective
+        obj_line = lines[0]
+        if obj_line.lower().startswith("max"):
+            obj_type = "Max"
+            rest = obj_line[3:].strip()
+        elif obj_line.lower().startswith("min"):
+            obj_type = "Min"
+            rest = obj_line[3:].strip()
+        else:
+            raise ValueError("Função objetivo deve começar com 'Max' ou 'Min'")
+
+        obj_coeffs = {}
+        for raw_coeff, var in re.findall(r'([+-]?\s*\d*)x(\d+)', rest):
+            coeff = raw_coeff.replace(" ", "")
+            if coeff == "" or coeff == "+":
+                c = 1
+            elif coeff == "-":
+                c = -1
+            else:
+                c = int(coeff)
+            idx = int(var)
+            obj_coeffs[idx] = obj_coeffs.get(idx, 0) + c
+
+        constraints = []
+        nonneg = {}
 
         for line in lines[1:]:
-            if self.is_non_negative(line):
-                self.parse_non_negative(line)
-            elif "<=" in line or ">=" in line or "=" in line:
-                self.parse_constraint(line)
+            m_free = re.match(r'^x(\d+)\s+(free|livre)$', line, re.I)
+            m_nonneg = re.match(r'^x(\d+)\s*>=\s*0$', line)
+            if m_free:
+                var = int(m_free.group(1))
+                nonneg[var] = False
+                continue
+            if m_nonneg:
+                var = int(m_nonneg.group(1))
+                nonneg[var] = True
+                continue
 
-        #if some variables were not mentioned in non-negativity constraints, assume they are non-negative
-        while len(self.non_negative) < self.num_vars:
-            self.non_negative.append(True)
+            if "<=" in line or ">=" in line or "=" in line:
+                coeff_map = {}
+                for raw_coeff, var in re.findall(r'([+-]?\s*\d*)x(\d+)', line):
+                    coeff = raw_coeff.replace(" ", "")
+                    if coeff == "" or coeff == "+":
+                        c = 1
+                    elif coeff == "-":
+                        c = -1
+                    else:
+                        c = int(coeff)
+                    idx = int(var)
+                    coeff_map[idx] = coeff_map.get(idx, 0) + c
+
+                if "<=" in line:
+                    comp = "<="
+                elif ">=" in line:
+                    comp = ">="
+                else:
+                    comp = "="
+
+                b_match = re.search(r'(-?\d+)\s*$', line)
+                if not b_match:
+                    raise ValueError("Não foi possível ler RHS na linha: " + line)
+                b = int(b_match.group(1))
+
+                constraints.append((coeff_map, comp, b))
+
+        all_idx = set(obj_coeffs.keys())
+        for cm,_,_ in constraints:
+            all_idx |= set(cm.keys())
+        all_idx |= set(nonneg.keys())
+        n = max(all_idx) if all_idx else 0
+
+        c = [0.0]*n
+        for i in range(1, n+1):
+            c[i-1] = float(obj_coeffs.get(i, 0))
+
+        constraints_vec = []
+        for coeff_map, comp, b in constraints:
+            row = [0.0]*n
+            for i in range(1, n+1):
+                row[i-1] = float(coeff_map.get(i, 0))
+            constraints_vec.append((row, comp, float(b)))
+
+        nonneg_list = []
+        for i in range(1, n+1):
+            nonneg_list.append(nonneg.get(i, True))
 
         return {
-            "objective_type": self.objective_type,
-            "objective_coeffs": self.objective_coeffs,
-            "constraints": self.constraints,
-            "num_vars": self.num_vars,
-            "non_negative": self.non_negative
+            "objective_type": obj_type,
+            "objective_coeffs": c,
+            "constraints": constraints_vec,
+            "num_vars": n,
+            "non_negative": nonneg_list
         }
-        
-    def is_non_negative(self, line):
-        return re.match(r"x\d+\s*>=\s*0$", line) is not None
-    
-    def parse_non_negative(self, line):
-        var = int(re.findall(r"x(\d+)", line)[0])
-        
-        self.num_vars = max(self.num_vars, var)
-        
-        while len(self.non_negative) < var:
-            self.non_negative.append(True)
-            
-        self.non_negative[var - 1] = True
-    
-    def parse_objective(self, line):
-        if line.startswith("Max"):
-            self.objective_type = "Max"
-        elif line.startswith("Min"):
-            self.objective_type = "Min"
-        else:
-            raise ValueError("Objective function must be Max or Min.")
-
-        """
-        Explaining the regex:
-        ([+-]?\s*\d*) - 1st step, we search for the coefficient of the variable:
-            [+-]?      - an optional '+' or '-' sign
-            \s*        - followed by any number of spaces
-            \d*        - followed by any number of digits (the coefficient itself)
-        x(\d+)       - 2nd step, we look for the variable part:
-            x          - the character 'x' indicating a variable
-            (\d+)      - followed by one or more digits (the variable index, e.g. x1, x2, etc.)
-        """
-
-        coeffs = re.findall(r'([+-]?\s*\d*)x(\d+)', line)
-        #after we have found all coefficients and variable indices, we iterate over them to process each pair:
-        for raw_coeff, var in coeffs:
-            raw_coeff = raw_coeff.replace(" ", "") #if we have some spaces, like "+ 3", we remove them
-            if raw_coeff == '+' or raw_coeff == '' or raw_coeff == '+ ':
-                raw_coeff = 1
-            elif raw_coeff == '-':
-                raw_coeff = -1
-            else:
-                raw_coeff = int(raw_coeff)
-            var = int(var)
-            self.num_vars = max(self.num_vars, var)
-            #consider an edge case where the coefficients are not in order, like "Max 3x3 + 2x1 + x2"
-            #we store them as tuples (variable index, coefficient) to sort them later
-            self.objective_coeffs.append((var, raw_coeff))
-
-        self.objective_coeffs = [c for _, c in sorted(self.objective_coeffs)]
-
-    def parse_constraint(self, line):
-        coeffs = re.findall(r'([+-]?\s*\d*)x(\d+)', line)
-        parsed = [0] * (self.num_vars)
-
-        for raw_coeff, var in coeffs:
-            raw_coeff = raw_coeff.replace(" ", "")
-            if raw_coeff == '' or raw_coeff == '+':
-                raw_coeff = 1
-            elif raw_coeff == '-':
-                raw_coeff = -1
-            else:
-                raw_coeff = int(raw_coeff)
-
-            var = int(var)
-            parsed[var - 1] = raw_coeff
-
-        if "<=" in line:
-            comp = "<="
-        elif ">=" in line:
-            comp = ">="
-        else:
-            comp = "="
-
-        """
-        (-?\d+)$
-            -? - matches an optional negative sign
-            \d+ - matches one or more digits
-            $ - guarantees that the match is at the end of the line
-        """
-
-        b = int(re.findall(r'(-?\d+)$', line)[0])
-
-        self.constraints.append((parsed, comp, b))
