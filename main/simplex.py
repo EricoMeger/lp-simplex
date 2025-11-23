@@ -1,9 +1,8 @@
-from typing import List, Tuple, Optional
 from tableau import Tableau
 
 class Simplex:
-    def __init__(self, objective_coeffs: List[float], constraints: List[Tuple], 
-                 objective_type: str = "Max", non_negative: List[bool] = None):
+    def __init__(self, objective_coeffs, constraints, 
+                 objective_type="Max", non_negative=None):
         """
         Args:
             objective_coeffs: objective function coefficients 
@@ -29,7 +28,7 @@ class Simplex:
         self.solution = None
         self.optimal_value = None
         
-    def solve(self) -> dict:
+    def solve(self):
         """
         Solves the LP problem using the Simplex method with Big M.
         
@@ -106,7 +105,7 @@ class Simplex:
             col_idx = self.num_vars + num_slack + i
             self.artificial_indices.append(col_idx)
     
-    def simplex_iterations(self) -> str:
+    def simplex_iterations(self):
         """
         Returns:
             "optimal", "unbounded" or "infeasible"
@@ -141,7 +140,7 @@ class Simplex:
         
         return "max_iterations_reached"
     
-    def find_pivot_column(self) -> Optional[int]:
+    def find_pivot_column(self):
         """
         Find the pivot column (non-basic variable with most negative coefficient).
         Uses Bland's rule to avoid cycling.
@@ -162,7 +161,7 @@ class Simplex:
         
         return None
     
-    def find_pivot_row(self, pivot_col: int) -> Optional[int]:
+    def find_pivot_row(self, pivot_col):
         m = len(self.tableau_obj.basis)
         ratios = []
         
@@ -186,7 +185,7 @@ class Simplex:
         
         return None
     
-    def pivot(self, pivot_row: int, pivot_col: int):
+    def pivot(self, pivot_row, pivot_col):
         pivot = self.tableau_obj.tableau[pivot_row][pivot_col]
         num_cols = len(self.tableau_obj.tableau[0])
         
@@ -199,7 +198,7 @@ class Simplex:
                 for j in range(num_cols):
                     self.tableau_obj.tableau[i][j] -= multiplier * self.tableau_obj.tableau[pivot_row][j]
     
-    def check_artificial_in_basis(self) -> bool:
+    def check_artificial_in_basis(self):
         """
         Check for artificial variables in the basis with positive value.
         If true, the problem is infeasible.
