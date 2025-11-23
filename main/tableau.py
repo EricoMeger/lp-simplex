@@ -2,272 +2,118 @@
 EPS = 1e-9
 
 class Tableau:
-    def __init__(self, tableau_rows, col_types, var_names, base_vars, objective_type="Max"):
-        self.tableau = [row[:] for row in tableau_rows]
-        self.col_types = col_types[:]        # orig, slack, surplus, artificial
-        self.var_names = var_names[:]        # nomes das colunas
-        self.base_vars = base_vars[:]        # índice da coluna básica por linha
-        self.objective_type = objective_type
+    def __init__(self, A, b, c):
+        """
+        A = constraints matrix (lista de listas com coeficientes)
+        b = independent terms (lista com RHS das restrições)
+        c = coefficients of the objective function (lista)
+        """
+        self.A = A
+        self.b = b
+        self.c = c
 
-    # ==========================================================
-    # FASE 1 - Construção do tableau
-    # ==========================================================
-    @classmethod
-    def from_phase1(cls, A, comps, b, orig_var_names=None, objective_type="Max"):
-        m = len(A)
-        n = len(A[0]) if m > 0 else 0
+        self.num_constraints = len(A)
+        self.num_vars = len(c)
 
-        tableau = [row[:] for row in A]
+        self.var_names = [f"x{i+1}" for i in range(self.num_vars)]
+        
+        self.slack_vars = []
+        self.artificial_vars = []
+        
+        self.basis = []
+        
+        self.tableau = []
 
-        col_types = ['orig'] * n
-        var_names = orig_var_names[:] if orig_var_names else [f"x{j+1}" for j in range(n)]
-        base_vars = [None] * m
+    def add_slack_variable(self, name=None):
+        if name is None:
+            name = f"w{len(self.slack_vars) + 1}"
+        self.slack_vars.append(name)
+        return name
 
-        slack_count = 0
-        artificial_count = 0
+    def add_artificial_variable(self, name=None):
+        if name is None:
+            name = f"a{len(self.artificial_vars) + 1}"
+        self.artificial_vars.append(name)
+        return name
 
-        for i, comp in enumerate(comps):
+    def build_tableau(self, slack_indices, artificial_indices=None, M=1000000, slack_types=None):
+        """
+        Constrói o tableau do simplex.
+        
+        Args:
+            slack_indices: index list of constraints that receive slack variables
+            artificial_indices: index list of constraints that receive artificial variables
+            M: Big M penalty value for artificial variables
+            slack_types: dictionary {constraint_index: coef} where coef is 1 (<=) or -1 (>=)
+        """
+        m = self.num_constraints
+        n = self.num_vars
+        num_slack = len(slack_indices) if slack_indices else 0
+        num_artificial = len(artificial_indices) if artificial_indices else 0
+        num_cols = n + num_slack + num_artificial + 1
+        self.tableau = [[0.0] * num_cols for _ in range(m + 1)]
 
-            # <=  ---> + slack
-            if comp == "<=":
-                col = len(col_types)
-                for r in range(m):
-                    tableau[r].append(1.0 if r == i else 0.0)
-
-                col_types.append("slack")
-                var_names.append(f"s{slack_count+1}")
-                base_vars[i] = col
-                slack_count += 1
-
-            # >= ---> surplus (-1) + artificial (+1)
-            elif comp == ">=":
-                # Surplus
-                col_surp = len(col_types)
-                for r in range(m):
-                    tableau[r].append(-1.0 if r == i else 0.0)
-
-                col_types.append("surplus")
-                var_names.append(f"e{slack_count+1}")
-                slack_count += 1
-
-                # Artificial
-                col_art = len(col_types)
-                for r in range(m):
-                    tableau[r].append(1.0 if r == i else 0.0)
-
-                col_types.append("artificial")
-                var_names.append(f"a{artificial_count+1}")
-                base_vars[i] = col_art
-                artificial_count += 1
-
-            # = ---> + artificial
-            elif comp == "=":
-                col_art = len(col_types)
-                for r in range(m):
-                    tableau[r].append(1.0 if r == i else 0.0)
-
-                col_types.append("artificial")
-                var_names.append(f"a{artificial_count+1}")
-                base_vars[i] = col_art
-                artificial_count += 1
-
-        # coluna b
         for i in range(m):
-            tableau[i].append(b[i])
+            for j in range(n):
+                self.tableau[i][j] = float(self.A[i][j])
+            self.tableau[i][-1] = float(self.b[i])
 
-        # ==========================================================
-        # Linha OBJ da fase 1: minimizar soma das artificiais → coef −1
-        # ==========================================================
-        total_cols = len(tableau[0])
-        obj_row = [0.0] * total_cols
+        base = [None] * m
 
-        for j, t in enumerate(col_types):
-            if t == "artificial":
-                obj_row[j] = -1.0
+        slack_col = n
+        for idx in (slack_indices or []):
+            var_name = self.add_slack_variable()
+            coef = 1.0 if slack_types is None else slack_types.get(idx, 1.0)
+            self.tableau[idx][slack_col] = coef
+            if coef == 1.0:
+                base[idx] = var_name
+            slack_col += 1
 
-        # adiciona linha obj
-        tableau.append(obj_row)
+        artificial_col = n + num_slack
+        artificial_col_indices = []
+        for idx in (artificial_indices or []):
+            var_name = self.add_artificial_variable()
+            self.tableau[idx][artificial_col] = 1.0
+            base[idx] = var_name
+            artificial_col_indices.append(artificial_col)
+            artificial_col += 1
 
-        # corrige linha OBJ adicionando linhas com artificiais básicas
-        for i in range(m):
-            bv = base_vars[i]
-            if bv is not None and col_types[bv] == "artificial":
-                tableau[-1] = [
-                    tableau[-1][j] + tableau[i][j]
-                    for j in range(total_cols)
-                ]
+        for j in range(n):
+            self.tableau[-1][j] = -float(self.c[j])
 
-        return cls(tableau, col_types, var_names, base_vars, objective_type)
+        for col_idx in artificial_col_indices:
+            self.tableau[-1][col_idx] = M
+        if artificial_indices:
+            for idx in artificial_indices:
+                for j in range(num_cols):
+                    self.tableau[-1][j] -= M * self.tableau[idx][j]
+
+        self.basis = base
+
+    def get_all_var_names(self):
+        return self.var_names + self.slack_vars + self.artificial_vars
 
     # ==========================================================
     # Impressão do tableau
     # ==========================================================
     def print_tableau(self, iteration=0):
-        m = len(self.tableau) - 1
-        header = ["VB"] + self.var_names + ["b"]
+        all_vars = self.get_all_var_names()
+        cabecalho = ["VB"] + all_vars + ["b"]
+        largura = 8
 
         print(f"=== Iteracao: {iteration} ===")
-        print("".join(f"{h:>10}" for h in header))
+        print(f"{cabecalho[0]:>15}", end="")
+        for elemento in cabecalho[1:]:
+            print(f"{elemento:>{largura}}", end="")
+        print()
 
-        for i in range(m):
-            bv = self.base_vars[i]
-            vb_name = self.var_names[bv] if bv is not None else "?"
-            print(f"{vb_name:>10}", end="")
-            for v in self.tableau[i]:
-                print(f"{v:>10.4f}", end="")
+        for i, var in enumerate(self.basis):
+            print(f"{var:>15}", end="")
+            for valor in self.tableau[i]:
+                print(f"{valor:>{largura}.2f}", end="")
             print()
 
-        print(f"{'OBJ':>10}", end="")
-        for v in self.tableau[-1]:
-            print(f"{v:>10.4f}", end="")
-        print("\n")
-
-    # ==========================================================
-    # Simplex pivot (FASE 1 e FASE 2)
-    # ==========================================================
-    def find_pivot(self):
-        last = self.tableau[-1]
-        # Detect Phase 1 (artificials still present). In Phase 1 we are
-        # maximizing -w (row built as negative of the sum of artificials).
-        # So entering column should have POSITIVE coefficient.
-        phase1 = any(t == "artificial" for t in self.col_types)
-
-        if phase1:
-            # Choose column with largest positive coefficient
-            candidates = [(val, j) for j, val in enumerate(last[:-1]) if val > EPS]
-            if not candidates:
-                return None  # Optimal for Phase 1 (all artificials driven to zero)
-            # pick with max positive value
-            _, pivot_col = max(candidates, key=lambda x: x[0])
-        else:
-            # Phase 2 (standard maximization with negative costs in row)
-            candidates = [(val, j) for j, val in enumerate(last[:-1]) if val < -EPS]
-            if not candidates:
-                return None  # Optimal for Phase 2
-            # pick most negative
-            _, pivot_col = min(candidates, key=lambda x: x[0])
-
-        # Ratio test (same for both phases): need a_ij > 0
-        ratios = []
-        for i in range(len(self.tableau) - 1):
-            a = self.tableau[i][pivot_col]
-            if a > EPS:
-                ratios.append((self.tableau[i][-1] / a, i))
-
-        if not ratios:
-            return ("unbounded", pivot_col)
-
-        ratios.sort()
-        return ratios[0][1], pivot_col
-
-    def pivot(self, r, c):
-        pv = self.tableau[r][c]
-        self.tableau[r] = [v / pv for v in self.tableau[r]]
-
-        for i in range(len(self.tableau)):
-            if i != r:
-                f = self.tableau[i][c]
-                self.tableau[i] = [
-                    self.tableau[i][j] - f * self.tableau[r][j]
-                    for j in range(len(self.tableau[0]))
-                ]
-
-        self.base_vars[r] = c
-
-    # ==========================================================
-    # Loop do simplex
-    # ==========================================================
-    def run_simplex(self, verbose=True, max_iter=200):
-        it = 0
-        while True:
-            it += 1
-            if verbose:
-                self.print_tableau(it)
-
-            pv = self.find_pivot()
-            if pv is None:
-                return "optimal"
-            if pv[0] == "unbounded":
-                return "unbounded"
-
-            r, c = pv
-            self.pivot(r, c)
-
-            if it >= max_iter:
-                return "max_iter"
-
-    # ==========================================================
-    # Remover artificiais para Fase 2
-    # ==========================================================
-    def remove_artificials(self):
-        cols_to_remove = [i for i, t in enumerate(self.col_types) if t == "artificial"]
-
-        remap = {}
-        jnew = 0
-        for j in range(len(self.col_types)):
-            if j not in cols_to_remove:
-                remap[j] = jnew
-                jnew += 1
-
-        new_col_types = [t for i, t in enumerate(self.col_types) if i not in cols_to_remove]
-        new_var_names = [v for i, v in enumerate(self.var_names) if i not in cols_to_remove]
-
-        new_tableau = []
-        for i in range(len(self.tableau) - 1):
-            new_tableau.append([
-                val for j, val in enumerate(self.tableau[i]) if j not in cols_to_remove
-            ])
-
-        new_base = []
-        for bv in self.base_vars:
-            new_base.append(remap.get(bv, None))
-
-        return Tableau(new_tableau, new_col_types, new_var_names, new_base, self.objective_type)
-
-    # ==========================================================
-    # Linha objetivo da Fase 2
-    # ==========================================================
-    def set_objective_from_original(self, c_orig, objective_type="Max"):
-        total_cols = len(self.tableau[0])
-        obj = [0.0] * total_cols
-
-        orig_idx = [i for i, t in enumerate(self.col_types) if t == "orig"]
-
-        for k, j in enumerate(orig_idx):
-            if k < len(c_orig):
-                obj[j] = -c_orig[k] if objective_type == "Max" else c_orig[k]
-
-        # Ajustar com base
-        for i in range(len(self.tableau) - 1):
-            bv = self.base_vars[i]
-            if bv is not None and abs(obj[bv]) > EPS:
-                f = obj[bv]
-                obj = [
-                    obj[j] - f * self.tableau[i][j]
-                    for j in range(total_cols)
-                ]
-
-        self.tableau.append(obj)
-
-    # ==========================================================
-    # Extração da solução expandida
-    # ==========================================================
-    def extract_solution_expanded(self, k):
-        m = len(self.tableau) - 1
-        sol = [0.0] * k
-
-        for col in range(k):
-            row = None
-            ok = True
-            for i in range(m):
-                if abs(self.tableau[i][col] - 1) < EPS:
-                    if row is not None:
-                        ok = False
-                        break
-                    row = i
-                elif abs(self.tableau[i][col]) > EPS:
-                    ok = False
-                    break
-            sol[col] = self.tableau[row][-1] if ok and row is not None else 0.0
-
-        return sol
+        print(f"{'Z':>15}", end="")  
+        for valor in self.tableau[-1]:
+            print(f"{valor:>{largura}.2f}", end="")
+        print()

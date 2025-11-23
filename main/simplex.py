@@ -1,158 +1,225 @@
-# simplex.py
-from parser import Parser
+from typing import List, Tuple, Optional
 from tableau import Tableau
 
-EPS = 1e-9
-
-class SimplexSolver:
-    def __init__(self, model):
-        if "objective_coeffs" in model:
-            self.c = [float(x) for x in model["objective_coeffs"]]
-        else:
-            self.c = [float(x) for x in model["c"]]
-
-        self.objective_type = model["objective_type"]
-        self.constraints = model["constraints"]
-        self.nonneg = model.get("non_negative", model.get("nonneg"))
-        self.n = model["num_vars"]
-
-    # ==========================================================
-    # Expansão de variáveis livres (x = x⁺ - x⁻)
-    # ==========================================================
-    def _expand_free(self, A_rows, c, nonneg):
-        mapping = []
-        var_names = []
-        cur = 0
-
-        for i in range(len(c)):
-            if not nonneg[i]:
-                # variável livre → vira duas não-negativas
-                mapping.append((cur, cur+1))
-                var_names.append(f"x{i+1}_pos")
-                var_names.append(f"x{i+1}_neg")
-                cur += 2
-            else:
-                mapping.append((cur,))
-                var_names.append(f"x{i+1}")
-                cur += 1
-
-        new_n = cur
-        c2 = [0.0] * new_n
-
-        # Expande objetivo
-        for i in range(len(c)):
-            idxs = mapping[i]
-            if len(idxs) == 2:
-                c2[idxs[0]] += c[i]
-                c2[idxs[1]] += -c[i]
-            else:
-                c2[idxs[0]] += c[i]
-
-        # Expande restrições
-        A2 = []
-        for row in A_rows:
-            new_row = [0.0] * new_n
-            for i in range(len(c)):
-                idxs = mapping[i]
-                if len(idxs) == 2:
-                    new_row[idxs[0]] += row[i]
-                    new_row[idxs[1]] += -row[i]
-                else:
-                    new_row[idxs[0]] += row[i]
-            A2.append(new_row)
-
-        return A2, c2, mapping, var_names
-
-    # ==========================================================
-    # Resolver
-    # ==========================================================
-    def solve(self, verbose=True):
-        # A, comp, b
-        A = [row for row, _, _ in self.constraints]
-        comps = [comp for _, comp, _ in self.constraints]
-        b = [bb for *_, bb in self.constraints]
-
-        # Expande variáveis livres
-        A2, c2, mapping, var_names = self._expand_free(A, self.c, self.nonneg)
-
-        # ------------------------------------------------------
-        # FASE 1: construir tableau
-        # ------------------------------------------------------
-        T1 = Tableau.from_phase1(A2, comps, b, orig_var_names=var_names,
-                                 objective_type=self.objective_type)
-
-        if verbose:
-            print("\n--- Fase 1 (zerar artificiais) ---\n")
-
-        status_phase1 = T1.run_simplex(verbose=verbose)
-
-        if status_phase1 == "unbounded":
-            if verbose:
-                print("Fase 1: ilimitado.")
-            return None
-
-        phase1_obj = T1.tableau[-1][-1]
-
-        if abs(phase1_obj) > 1e-7:
-            if verbose:
-                print("Problema inviável (valor da Fase 1 != 0).")
-            return None
-
-        # ------------------------------------------------------
-        # Remover artificiais para iniciar Fase 2
-        # ------------------------------------------------------
-        T2 = T1.remove_artificials()
-
-        # Criar linha OBJ (fase 2)
-        # Substituir por objetivo original (não adicionar linha extra antes; método já cria a linha OBJ)
-        T2.set_objective_from_original(c2, objective_type=self.objective_type)
-
-        if verbose:
-            print("\n--- Fase 2 (otimização da função objetivo original) ---\n")
-
-        status_phase2 = T2.run_simplex(verbose=verbose)
-
-        if status_phase2 == "unbounded":
-            if verbose:
-                print("Problema ilimitado (fase 2).")
-            return None
-
-        # ------------------------------------------------------
-        # Recuperar solução das variáveis expandidas
-        # ------------------------------------------------------
-        sol_expanded = T2.extract_solution_expanded(len(c2))
-
-        # Remapear para x originais
-        orig_solution = {}
-        for orig_idx, mapped in enumerate(mapping):
-            if len(mapped) == 2:
-                p, n = mapped
-                vp = sol_expanded[p] if p < len(sol_expanded) else 0
-                vn = sol_expanded[n] if n < len(sol_expanded) else 0
-                orig_solution[f"x{orig_idx+1}"] = vp - vn
-            else:
-                idx = mapped[0]
-                orig_solution[f"x{orig_idx+1}"] = sol_expanded[idx] if idx < len(sol_expanded) else 0
-
-        # Valor ótimo
-        z = T2.tableau[-1][-1]
-        if self.objective_type == "Min":
-            z = -z
-
+class Simplex:
+    def __init__(self, objective_coeffs: List[float], constraints: List[Tuple], 
+                 objective_type: str = "Max", non_negative: List[bool] = None):
+        """
+        Args:
+            objective_coeffs: objective function coefficients 
+            constraints: List of tuples (coefficients, operator, rhs)
+            objective_type: "Max" (only maximization is supported)
+            non_negative: List indicating if each variable is non-negative
+        """
+        if objective_type != "Max":
+            raise ValueError("Only maximization is supported.")
+        
+        self.c = [float(x) for x in objective_coeffs]
+        self.constraints = constraints
+        self.objective_type = objective_type
+        self.num_vars = len(objective_coeffs)
+        self.non_negative = non_negative if non_negative else [True] * self.num_vars
+        
+        self.M = 1000000
+        
+        self.tableau_obj = None
+        
+        self.artificial_indices = []
+        
+        self.solution = None
+        self.optimal_value = None
+        
+    def solve(self) -> dict:
+        """
+        Solves the LP problem using the Simplex method with Big M.
+        
+        Returns:
+            dict with 'status', 'solution', 'optimal_value'
+        """
+        self.prepare_tableau()
+        
+        status = self.simplex_iterations()
+        
+        if status == "optimal":
+            self.extract_solution()
+            
         return {
-            "z": z,
-            "original_solution": orig_solution,
-            "phase1_obj": phase1_obj,
-            "status_phase1": status_phase1,
-            "status_phase2": status_phase2
+            "status": status,
+            "solution": self.solution,
+            "optimal_value": self.optimal_value
         }
-
-
-# Interface simples
-def run_from_input(path="input/input.txt", verbose=True):
-    p = Parser(path)
-    model = p.parse()
-    solver = SimplexSolver(model)
-    return solver.solve(verbose=verbose)
-
-from parser import Parser
+    
+    def prepare_tableau(self):
+        """
+        Prepares the initial tableau:
+        - Processes constraints
+        - Identifies which need slack/artificial variables
+        - Creates the tableau using the Tableau class
+        """
+        A = []  
+        b = []  
+        slack_indices = []
+        artificial_indices = []
+        slack_types = {} 
+        
+        for i, (coeffs, op, rhs) in enumerate(self.constraints):
+            coeffs = [float(x) for x in coeffs]
+            rhs = float(rhs)
+            
+            # if RHS is negative we multiply by -1 and invert the operator
+            if rhs < 0:
+                coeffs = [-x for x in coeffs]
+                rhs = -rhs
+                if op == "<=":
+                    op = ">="
+                elif op == ">=":
+                    op = "<="
+            
+            A.append(coeffs)
+            b.append(rhs)
+            
+            if op == "<=":
+                # add a slack variable with coefficient +1
+                slack_indices.append(i)
+                slack_types[i] = 1.0
+                
+            elif op == ">=":
+                # add a slack variable with coefficient -1 and a artificial variable
+                slack_indices.append(i)
+                slack_types[i] = -1.0
+                artificial_indices.append(i)
+                
+            else:  # op == "="
+                # add only an artificial variable
+                artificial_indices.append(i)
+        
+        self.tableau_obj = Tableau(A, b, self.c)
+        self.tableau_obj.build_tableau(
+            slack_indices=slack_indices,
+            artificial_indices=artificial_indices,
+            M=self.M,
+            slack_types=slack_types
+        )
+        
+        num_slack = len(slack_indices)
+        for i, idx in enumerate(artificial_indices):
+            col_idx = self.num_vars + num_slack + i
+            self.artificial_indices.append(col_idx)
+    
+    def simplex_iterations(self) -> str:
+        """
+        Returns:
+            "optimal", "unbounded" or "infeasible"
+        """
+        max_iterations = 1000
+        iteration = 0
+        
+        self.tableau_obj.print_tableau(iteration=0)
+        
+        while iteration < max_iterations:
+            iteration += 1
+            
+            pivot_col = self.find_pivot_column()
+            
+            if pivot_col is None:
+                if self.check_artificial_in_basis():
+                    return "infeasible"
+                return "optimal"
+            
+            # find pivot row (variable leaving the basis)
+            pivot_row = self.find_pivot_row(pivot_col)
+            
+            if pivot_row is None:
+                return "unbounded"
+            
+            self.pivot(pivot_row, pivot_col)
+            
+            all_var_names = self.tableau_obj.get_all_var_names()
+            self.tableau_obj.basis[pivot_row] = all_var_names[pivot_col]
+            
+            self.tableau_obj.print_tableau(iteration=iteration)
+        
+        return "max_iterations_reached"
+    
+    def find_pivot_column(self) -> Optional[int]:
+        """
+        Find the pivot column (non-basic variable with most negative coefficient).
+        Uses Bland's rule to avoid cycling.
+        
+        Returns:
+            Index of the pivot column or None if optimal
+        """
+        obj_row = self.tableau_obj.tableau[-1][:-1]
+        
+        min_val = min(obj_row)
+        
+        if min_val >= -1e-10:  
+            return None
+        
+        for i, val in enumerate(obj_row):
+            if abs(val - min_val) < 1e-10:
+                return i
+        
+        return None
+    
+    def find_pivot_row(self, pivot_col: int) -> Optional[int]:
+        m = len(self.tableau_obj.basis)
+        ratios = []
+        
+        for i in range(m):
+            if self.tableau_obj.tableau[i][pivot_col] > 1e-10:
+                ratio = self.tableau_obj.tableau[i][-1] / self.tableau_obj.tableau[i][pivot_col]
+                ratios.append((ratio, i))
+            else:
+                ratios.append((float('inf'), i))
+        
+        valid_ratios = [(r, i) for r, i in ratios if r >= 0]
+        
+        if not valid_ratios:
+            return None  # means that the problem is unbounded
+        
+        min_ratio = min(r for r, _ in valid_ratios)
+        
+        for r, i in valid_ratios:
+            if abs(r - min_ratio) < 1e-10:
+                return i
+        
+        return None
+    
+    def pivot(self, pivot_row: int, pivot_col: int):
+        pivot = self.tableau_obj.tableau[pivot_row][pivot_col]
+        num_cols = len(self.tableau_obj.tableau[0])
+        
+        for j in range(num_cols):
+            self.tableau_obj.tableau[pivot_row][j] /= pivot
+        
+        for i in range(len(self.tableau_obj.tableau)):
+            if i != pivot_row:
+                multiplier = self.tableau_obj.tableau[i][pivot_col]
+                for j in range(num_cols):
+                    self.tableau_obj.tableau[i][j] -= multiplier * self.tableau_obj.tableau[pivot_row][j]
+    
+    def check_artificial_in_basis(self) -> bool:
+        """
+        Check for artificial variables in the basis with positive value.
+        If true, the problem is infeasible.
+        """
+        all_var_names = self.tableau_obj.get_all_var_names()
+        
+        for i, var_name in enumerate(self.tableau_obj.basis):
+            if var_name.startswith('a'):
+                if self.tableau_obj.tableau[i][-1] > 1e-10:
+                    return True
+        return False
+    
+    def extract_solution(self):
+        self.solution = [0.0] * self.num_vars
+        
+        all_var_names = self.tableau_obj.get_all_var_names()
+        
+        for i, var_name in enumerate(self.tableau_obj.basis):
+            if var_name and var_name.startswith('x'):
+                var_index = int(var_name[1:]) - 1
+                self.solution[var_index] = self.tableau_obj.tableau[i][-1]
+        
+        self.optimal_value = self.tableau_obj.tableau[-1][-1]
