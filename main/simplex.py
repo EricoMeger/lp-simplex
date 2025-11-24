@@ -2,7 +2,7 @@ from tableau import Tableau
 
 class Simplex:
     def __init__(self, objective_coeffs, constraints, 
-                 objective_type="Max", non_negative=None):
+                 objective_type="Max", var_signs=None):
         """
         Args:
             objective_coeffs: objective function coefficients 
@@ -10,14 +10,23 @@ class Simplex:
             objective_type: "Max" (only maximization is supported)
             non_negative: List indicating if each variable is non-negative
         """
-        if objective_type != "Max":
-            raise ValueError("Only maximization is supported.")
+        self.original_objective_type = objective_type
+        self.orig_num_vars = len(objective_coeffs)
+        self.var_signs = var_signs if var_signs else [">=0"] * self.orig_num_vars
+
+        self.c, self.constraints, self._map_orig_to_internal = self._expand_variables(
+            objective_coeffs, constraints, self.var_signs
+        )
+
+        if objective_type == "Min":
+            self.c = [-float(x) for x in self.c]
+            self.is_minimization = True
+        else:
+            self.c = [float(x) for x in self.c]
+            self.is_minimization = False
         
-        self.c = [float(x) for x in objective_coeffs]
-        self.constraints = constraints
-        self.objective_type = objective_type
-        self.num_vars = len(objective_coeffs)
-        self.non_negative = non_negative if non_negative else [True] * self.num_vars
+        self.objective_type = "Max"
+        self.num_vars = len(self.c)
         
         self.M = 1000000
         
@@ -27,6 +36,49 @@ class Simplex:
         
         self.solution = None
         self.optimal_value = None
+
+    def _expand_variables(self, c, constraints, var_signs):
+        n = len(c)
+        A = [list(coeffs) for (coeffs, _, _) in constraints]
+        ops = [op for (_, op, _) in constraints]
+        b = [rhs for (_, _, rhs) in constraints]
+
+        new_c = []
+        mapping = []
+        col_blocks = []
+        for i in range(n):
+            sign = var_signs[i] if i < len(var_signs) else ">=0"
+            if sign == ">=0":
+                mapping.append([len(new_c)])
+                new_c.append(float(c[i]))
+                col_blocks.append(("single", i, [len(new_c)-1]))
+            elif sign == "<=0":
+                mapping.append([len(new_c)])
+                new_c.append(float(-c[i]))
+                col_blocks.append(("neg", i, [len(new_c)-1]))
+            else:
+                mapping.append([len(new_c), len(new_c)+1])
+                new_c.append(float(c[i]))
+                new_c.append(float(-c[i]))
+                col_blocks.append(("free", i, [len(new_c)-2, len(new_c)-1]))
+
+        A_exp = []
+        for r in range(len(constraints)):
+            row = [0.0] * len(new_c)
+            for i in range(n):
+                a = float(A[r][i])
+                typ, _, idxs = col_blocks[i]
+                if typ == "single":
+                    row[idxs[0]] = a
+                elif typ == "neg":
+                    row[idxs[0]] = -a
+                else:
+                    row[idxs[0]] = a
+                    row[idxs[1]] = -a
+            A_exp.append(row)
+
+        constraints_exp = [(A_exp[i], ops[i], b[i]) for i in range(len(constraints))]
+        return new_c, constraints_exp, mapping
         
     def solve(self):
         """
@@ -212,13 +264,28 @@ class Simplex:
         return False
     
     def extract_solution(self):
-        self.solution = [0.0] * self.num_vars
+        internal_solution = [0.0] * self.num_vars
         
         all_var_names = self.tableau_obj.get_all_var_names()
         
         for i, var_name in enumerate(self.tableau_obj.basis):
             if var_name and var_name.startswith('x'):
                 var_index = int(var_name[1:]) - 1
-                self.solution[var_index] = self.tableau_obj.tableau[i][-1]
+                internal_solution[var_index] = self.tableau_obj.tableau[i][-1]
+
+        sol = [0.0] * self.orig_num_vars
+        for i, idxs in enumerate(self._map_orig_to_internal):
+            if len(idxs) == 1:
+                if self.var_signs[i] == "<=0":
+                    sol[i] = -internal_solution[idxs[0]]
+                else:
+                    sol[i] = internal_solution[idxs[0]]
+            else:
+                plus, minus = idxs
+                sol[i] = internal_solution[plus] - internal_solution[minus]
+
+        self.solution = sol
         
         self.optimal_value = self.tableau_obj.tableau[-1][-1]
+        if self.is_minimization:
+            self.optimal_value = -self.optimal_value

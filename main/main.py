@@ -18,7 +18,7 @@ def main():
         objective_coeffs=result['objective_coeffs'],
         constraints=result['constraints'],
         objective_type=result['objective_type'],
-        non_negative=result['non_negative']
+        var_signs=result['var_signs']
     )
     
     solution = simplex.solve()
