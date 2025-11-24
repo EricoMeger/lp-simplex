@@ -22,13 +22,30 @@ class Parser:
 
     def __init__(self, filepath):
         self.filepath = filepath
+        self.objective_type = None 
+        self.objective_coeffs = []
+        self.constraints = []
+        self.num_vars = 0
+        self.non_negative = []
+        self.var_signs = []
 
     def parse(self):
         lines = [line.strip() for line in open(self.filepath)]
 
-        self.parse_objective(lines[0])
+        idx = None
+        for i, l in enumerate(lines):
+            ll = l.lower()
+            if ll.startswith("max") or ll.startswith("min"):
+                idx = i
+                break
+        if idx is None:
+            raise ValueError("Objective function must be Max or Min.")
 
-        for line in lines[1:]:
+        self.parse_objective(lines[idx])
+
+        for line in lines[idx+1:]:
+            if not line:
+                continue
             if self.is_non_negative(line):
                 self.parse_non_negative(line)
             elif "<=" in line or ">=" in line or "=" in line:
@@ -37,13 +54,16 @@ class Parser:
         #if some variables were not mentioned in non-negativity constraints, assume they are non-negative
         while len(self.non_negative) < self.num_vars:
             self.non_negative.append(True)
+        while len(self.var_signs) < self.num_vars:
+            self.var_signs.append(">=0")
 
         return {
             "objective_type": self.objective_type,
             "objective_coeffs": self.objective_coeffs,
             "constraints": self.constraints,
             "num_vars": self.num_vars,
-            "non_negative": self.non_negative
+            "non_negative": self.non_negative,
+            "var_signs": self.var_signs
         }
         
     def is_non_negative(self, line):
@@ -60,13 +80,18 @@ class Parser:
         
         while len(self.non_negative) < var:
             self.non_negative.append(True)
+        while len(self.var_signs) < var:
+            self.var_signs.append(">=0")
         
         if "livre" in line.lower():
             self.non_negative[var - 1] = False
+            self.var_signs[var - 1] = "free"
         elif "<=" in line:
             self.non_negative[var - 1] = False
+            self.var_signs[var - 1] = "<=0"
         else:
             self.non_negative[var - 1] = True
+            self.var_signs[var - 1] = ">=0"
     
     def parse_objective(self, line):
         line_lower = line.lower()
