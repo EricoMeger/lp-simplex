@@ -1,4 +1,5 @@
 from tableau import Tableau
+import os
 
 class Simplex:
     def __init__(self, objective_coeffs, constraints, 
@@ -13,8 +14,9 @@ class Simplex:
         self.original_objective_type = objective_type
         self.orig_num_vars = len(objective_coeffs)
         self.var_signs = var_signs if var_signs else [">=0"] * self.orig_num_vars
+        self.original_constraints = constraints[:]
 
-        self.c, self.constraints, self._map_orig_to_internal = self._expand_variables(
+        self.c, self.constraints, self._map_orig_to_internal = self.expand_variables(
             objective_coeffs, constraints, self.var_signs
         )
 
@@ -27,17 +29,14 @@ class Simplex:
         
         self.objective_type = "Max"
         self.num_vars = len(self.c)
-        
         self.M = 1000000
-        
         self.tableau_obj = None
-        
         self.artificial_indices = []
-        
         self.solution = None
         self.optimal_value = None
+        self.iteration_logs = []
 
-    def _expand_variables(self, c, constraints, var_signs):
+    def expand_variables(self, c, constraints, var_signs):
         n = len(c)
         A = [list(coeffs) for (coeffs, _, _) in constraints]
         ops = [op for (_, op, _) in constraints]
@@ -164,30 +163,28 @@ class Simplex:
         """
         max_iterations = 1000
         iteration = 0
-        
+
+        self.iteration_logs.append(self.tableau_obj.format_tableau(iteration=0))
         self.tableau_obj.print_tableau(iteration=0)
         
         while iteration < max_iterations:
             iteration += 1
             
             pivot_col = self.find_pivot_column()
-            
             if pivot_col is None:
                 if self.check_artificial_in_basis():
                     return "infeasible"
                 return "optimal"
             
-            # find pivot row (variable leaving the basis)
             pivot_row = self.find_pivot_row(pivot_col)
-            
             if pivot_row is None:
                 return "unbounded"
             
             self.pivot(pivot_row, pivot_col)
-            
             all_var_names = self.tableau_obj.get_all_var_names()
             self.tableau_obj.basis[pivot_row] = all_var_names[pivot_col]
-            
+
+            self.iteration_logs.append(self.tableau_obj.format_tableau(iteration=iteration))
             self.tableau_obj.print_tableau(iteration=iteration)
         
         return "max_iterations_reached"
@@ -265,9 +262,7 @@ class Simplex:
     
     def extract_solution(self):
         internal_solution = [0.0] * self.num_vars
-        
         all_var_names = self.tableau_obj.get_all_var_names()
-        
         for i, var_name in enumerate(self.tableau_obj.basis):
             if var_name and var_name.startswith('x'):
                 var_index = int(var_name[1:]) - 1
@@ -285,7 +280,37 @@ class Simplex:
                 sol[i] = internal_solution[plus] - internal_solution[minus]
 
         self.solution = sol
-        
         self.optimal_value = self.tableau_obj.tableau[-1][-1]
         if self.is_minimization:
             self.optimal_value = -self.optimal_value
+
+    def write_report(self, filepath):
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+        lines = []
+
+        lines.append("Iterações do Simplex")
+        lines.append("=" * 80)
+        lines.extend(self.iteration_logs)
+        lines.append("=" * 80)
+        lines.append("Solução")
+        lines.append("")
+        lines.append(f"FO: {self.optimal_value:.4f}")
+        
+        for i, v in enumerate(self.solution, start=1):
+            lines.append(f"x{i} = {v:.4f}")
+        lines.append("")
+        
+        for k, (coeffs, op, rhs) in enumerate(self.original_constraints, start=1):
+            lhs = 0.0
+            for j, a in enumerate(coeffs):
+                lhs += float(a) * float(self.solution[j] if j < len(self.solution) else 0.0)
+            if op == "<=":
+                line = f"R{k} = None <= {lhs:.4f} <= {float(rhs):.4f}"
+            elif op == ">=":
+                line = f"R{k} = {float(rhs):.4f} <= {lhs:.4f} <= None"
+            else:
+                line = f"R{k} = {float(rhs):.4f} <= {lhs:.4f} <= {float(rhs):.4f}"
+            lines.append(line)
+
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
