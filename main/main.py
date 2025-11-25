@@ -22,6 +22,8 @@ def main():
     )
     
     solution = simplex.solve()
+
+    simplex.write_report("output/resultado.txt")
     
     print()
     print("="*80)
@@ -29,7 +31,6 @@ def main():
     print("="*80)
     print()
     print(f"Status: {solution['status']}")
-    
     if solution['status'] == 'optimal':
         print(f"Valor ótimo: {solution['optimal_value']:.4f}")
         print("Solução ótima:")

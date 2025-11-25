@@ -90,24 +90,19 @@ class Tableau:
     def get_all_var_names(self):
         return self.var_names + self.slack_vars + self.artificial_vars
 
-    def print_tableau(self, iteration=0):
+    def format_tableau(self, iteration=0):
         all_vars = self.get_all_var_names()
         cabecalho = ["VB"] + all_vars + ["b"]
-        largura = 8
-
-        print(f"=== Iteracao: {iteration} ===")
-        print(f"{cabecalho[0]:>15}", end="")
-        for elemento in cabecalho[1:]:
-            print(f"{elemento:>{largura}}", end="")
-        print()
-
+        largura = 10
+        lines = []
+        lines.append(f"=== Iteracao: {iteration} ===")
+        lines.append(f"{cabecalho[0]:>15}" + "".join(f"{el:>{largura}}" for el in cabecalho[1:]))
         for i, var in enumerate(self.basis):
-            print(f"{var:>15}", end="")
-            for valor in self.tableau[i]:
-                print(f"{valor:>{largura}.2f}", end="")
-            print()
+            row = f"{(var or ''):>15}" + "".join(f"{v:>{largura}.2f}" for v in self.tableau[i])
+            lines.append(row)
+        obj = f"{'Z':>15}" + "".join(f"{v:>{largura}.2f}" for v in self.tableau[-1])
+        lines.append(obj)
+        return "\n".join(lines) + "\n"
 
-        print(f"{'Z':>15}", end="")  
-        for valor in self.tableau[-1]:
-            print(f"{valor:>{largura}.2f}", end="")
-        print()
+    def print_tableau(self, iteration=0):
+        print(self.format_tableau(iteration), end="")
