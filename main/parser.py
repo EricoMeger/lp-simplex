@@ -56,6 +56,19 @@ class Parser:
         }
         
     def is_non_negative(self, line):
+        """
+        x\d+\s*(>=|<=)\s*0$:
+            x\d+      - 'x' followed by one or more digits (variable index, e.g. x1, x2)
+            \s*       - any number of spaces
+            (>=|<=)   - either the ">=" or "<=" comparison operator
+            \s*       - any number of spaces
+            0         - the numeric bound zero
+            $         - end of line anchor to ensure the entire tail matches (so it wont match extra trailing chars)
+
+        This pattern matches lines like: "x1 >= 0" or "x2 <= 0".
+        In addition, we also treat lines containing the word "livre" (Portuguese for "free")
+        as indicating a free variable (no sign restriction).
+        """
         return re.match(r"x\d+\s*(>=|<=)\s*0$", line) is not None or "livre" in line.lower()
     
     def parse_non_negative(self, line):
@@ -92,15 +105,16 @@ class Parser:
             raise ValueError("Objective function must be Max or Min.")
 
         """
-        Regex atualizado para aceitar espaços entre coeficiente e variável:
-        ([+-]?\s*\d*)\s* - coeficiente com possíveis espaços após
-        x\s*(\d+)        - 'x' seguido de possíveis espaços e depois o índice
-        
-        Exemplos que funciona:
-        - "3x1"     (sem espaço)
-        - "3 x1"    (com espaço)
-        - "+ 3x1"   (sinal com espaço)
-        - "+3 x1"   (combinação)
+        Explaining the regex:
+        ([+-]?\s*\d*) - 1st step, we search for the coefficient of the variable:
+            [+-]?      - an optional '+' or '-' sign
+            \s*        - followed by any number of spaces
+            \d*        - followed by any number of digits (the coefficient itself)
+        \s*x\s*(\d+)       - 2nd step, we look for the variable part:
+            \s*        - any number of spaces
+            x          - the character 'x' indicating a variable
+            \s*        - any number of spaces
+            (\d+)      - followed by one or more digits (the variable index, e.g. x1, x2, etc.)
         """
         coeffs = re.findall(r'([+-]?\s*\d*)\s*x\s*(\d+)', line)
         
@@ -140,7 +154,13 @@ class Parser:
             comp = ">="
         else:
             comp = "="
-
+            
+        """
+        (-?\d+)$
+            -? - matches an optional negative sign
+            \d+ - matches one or more digits
+            $ - guarantees that the match is at the end of the line
+        """
         b = int(re.findall(r'(-?\d+)$', line)[0])
 
         self.constraints.append((parsed, comp, b))
