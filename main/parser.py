@@ -1,23 +1,12 @@
-# parser.py
 import re
 
 class Parser:
     """
-    Parser que lê arquivo input com formato:
-      Max 3x1 + 5x2
-      x1 + 2x2 <= 6
-      3x1 + 2x2 <= 12
-      x1 >= 0
-      x2 free
-
-    Retorna dicionário com:
-      {
-        "objective_type": "Max"/"Min",
-        "objective_coeffs": [...],
-        "constraints": [(row, comp, b), ...],
-        "num_vars": n,
-        "non_negative": [...]
-      }
+    Max 2x1 + 3x2 
+    2x1 + x2 <= 10
+    x1 + 3x2 <= 5
+    x1 >= 0
+    x2 >= 0
     """
 
     def __init__(self, filepath):
