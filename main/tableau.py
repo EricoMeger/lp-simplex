@@ -1,6 +1,3 @@
-# tableau.py
-EPS = 1e-9
-
 class Tableau:
     def __init__(self, A, b, c):
         """
@@ -53,7 +50,6 @@ class Tableau:
         num_cols = n + num_slack + num_artificial + 1
         self.tableau = [[0.0] * num_cols for _ in range(m + 1)]
 
-        # coluna b
         for i in range(m):
             for j in range(n):
                 self.tableau[i][j] = float(self.A[i][j])
@@ -108,8 +104,5 @@ class Tableau:
         lines.append(obj)
         return "\n".join(lines) + "\n"
 
-    # ==========================================================
-    # Impressão do tableau
-    # ==========================================================
     def print_tableau(self, iteration=0):
         print(self.format_tableau(iteration), end="")
